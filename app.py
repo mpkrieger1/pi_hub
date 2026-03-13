@@ -6,7 +6,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify
+import requests as http_requests
+from flask import Flask, render_template, request, jsonify, Response
 
 APP_NAME = "Pi Hub"
 HANDBRAKE_BIN = "HandBrakeCLI"
@@ -23,6 +24,11 @@ BASEBALL_PUBLIC_URL = "https://thedataball.com"
 MYFLOW_PUBLIC_URL = "https://reports.k-analytics.co"
 APPS_DIR = Path("/home/mpkrieger1/apps")
 APPS_CONFIG = DATA_DIR / "apps.json"
+
+FILE_ROOTS = {
+    "Downloads": Path("/mnt/ssd/downloads"),
+    "Movies": Path("/mnt/ssd/Movies"),
+}
 
 ALLOWED_OUTPUT_DIRS = {
     "movies": "/mnt/ssd/Movies",
@@ -960,6 +966,246 @@ def apps_delete(slug):
     del apps[slug]
     save_apps(apps)
     return jsonify({"ok": True})
+
+
+# ═══════════════════════════════════════════════════════════════
+# FILE MANAGER
+# ═══════════════════════════════════════════════════════════════
+
+def _resolve_file_path(root_key, rel_path):
+    """Resolve a relative path within an allowed root. Returns None if invalid."""
+    if root_key not in FILE_ROOTS:
+        return None
+    root = FILE_ROOTS[root_key]
+    clean = Path(rel_path.replace("\\", "/")).parts
+    # Reject any '..' components
+    if ".." in clean:
+        return None
+    resolved = root.joinpath(*clean) if clean else root
+    # Ensure it's still under the root
+    try:
+        resolved.resolve().relative_to(root.resolve())
+    except ValueError:
+        return None
+    return resolved
+
+
+def _file_info(path):
+    """Build a file/dir info dict."""
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "is_dir": path.is_dir(),
+        "size": stat.st_size if path.is_file() else None,
+        "modified": int(stat.st_mtime),
+    }
+
+
+@app.route("/files")
+def files_page():
+    roots = {k: str(v) for k, v in FILE_ROOTS.items()}
+    return render_template("files.html", app_name=APP_NAME, roots=roots)
+
+
+@app.route("/files/browse")
+def files_browse():
+    root_key = request.args.get("root", "")
+    rel = request.args.get("path", "")
+
+    if not root_key or root_key not in FILE_ROOTS:
+        return jsonify({"ok": False, "error": "Invalid root."}), 400
+
+    target = _resolve_file_path(root_key, rel)
+    if target is None or not target.exists() or not target.is_dir():
+        return jsonify({"ok": False, "error": "Directory not found."}), 404
+
+    items = []
+    try:
+        for entry in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            try:
+                items.append(_file_info(entry))
+            except Exception:
+                pass
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied."}), 403
+
+    return jsonify({
+        "ok": True,
+        "root": root_key,
+        "path": rel,
+        "items": items,
+    })
+
+
+@app.route("/files/rename", methods=["POST"])
+def files_rename():
+    data = request.get_json() or {}
+    root_key = data.get("root", "")
+    rel = data.get("path", "")
+    new_name = data.get("new_name", "").strip()
+
+    if not new_name or "/" in new_name or "\\" in new_name or ".." in new_name:
+        return jsonify({"ok": False, "error": "Invalid name."}), 400
+
+    target = _resolve_file_path(root_key, rel)
+    if target is None or not target.exists():
+        return jsonify({"ok": False, "error": "File not found."}), 404
+
+    new_path = target.parent / new_name
+    if new_path.exists():
+        return jsonify({"ok": False, "error": "A file with that name already exists."}), 409
+
+    target.rename(new_path)
+    return jsonify({"ok": True})
+
+
+@app.route("/files/move", methods=["POST"])
+def files_move():
+    data = request.get_json() or {}
+    root_key = data.get("root", "")
+    rel = data.get("path", "")
+    dest_rel = data.get("dest", "")
+
+    target = _resolve_file_path(root_key, rel)
+    dest_dir = _resolve_file_path(root_key, dest_rel)
+    if target is None or not target.exists():
+        return jsonify({"ok": False, "error": "Source not found."}), 404
+    if dest_dir is None or not dest_dir.is_dir():
+        return jsonify({"ok": False, "error": "Destination folder not found."}), 404
+
+    new_path = dest_dir / target.name
+    if new_path.exists():
+        return jsonify({"ok": False, "error": "File already exists in destination."}), 409
+
+    shutil.move(str(target), str(new_path))
+    return jsonify({"ok": True})
+
+
+@app.route("/files/delete", methods=["POST"])
+def files_delete():
+    data = request.get_json() or {}
+    root_key = data.get("root", "")
+    rel = data.get("path", "")
+
+    target = _resolve_file_path(root_key, rel)
+    if target is None or not target.exists():
+        return jsonify({"ok": False, "error": "File not found."}), 404
+
+    # Don't allow deleting the root itself
+    if target.resolve() == FILE_ROOTS[root_key].resolve():
+        return jsonify({"ok": False, "error": "Cannot delete root directory."}), 400
+
+    if target.is_dir():
+        shutil.rmtree(str(target))
+    else:
+        target.unlink()
+    return jsonify({"ok": True})
+
+
+@app.route("/files/mkdir", methods=["POST"])
+def files_mkdir():
+    data = request.get_json() or {}
+    root_key = data.get("root", "")
+    rel = data.get("path", "")
+    name = data.get("name", "").strip()
+
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return jsonify({"ok": False, "error": "Invalid folder name."}), 400
+
+    parent = _resolve_file_path(root_key, rel)
+    if parent is None or not parent.is_dir():
+        return jsonify({"ok": False, "error": "Parent directory not found."}), 404
+
+    new_dir = parent / name
+    if new_dir.exists():
+        return jsonify({"ok": False, "error": "Already exists."}), 409
+
+    new_dir.mkdir()
+    return jsonify({"ok": True})
+
+
+@app.route("/files/upload", methods=["POST"])
+def files_upload():
+    root_key = request.form.get("root", "")
+    rel = request.form.get("path", "")
+
+    target_dir = _resolve_file_path(root_key, rel)
+    if target_dir is None or not target_dir.is_dir():
+        return jsonify({"ok": False, "error": "Upload directory not found."}), 404
+
+    uploaded = []
+    for f in request.files.getlist("files"):
+        if not f.filename:
+            continue
+        safe_name = re.sub(r"[^\w\s\-\.\(\)]", "_", f.filename.strip())
+        dest = target_dir / safe_name
+        f.save(str(dest))
+        uploaded.append(safe_name)
+
+    return jsonify({"ok": True, "uploaded": uploaded})
+
+
+@app.route("/files/download")
+def files_download():
+    from flask import send_file
+    root_key = request.args.get("root", "")
+    rel = request.args.get("path", "")
+
+    target = _resolve_file_path(root_key, rel)
+    if target is None or not target.exists() or not target.is_file():
+        return jsonify({"ok": False, "error": "File not found."}), 404
+
+    return send_file(str(target), as_attachment=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# QBITTORRENT PROXY
+# ═══════════════════════════════════════════════════════════════
+
+QBT_UPSTREAM = "http://127.0.0.1:8080"
+
+@app.route("/qbt")
+@app.route("/qbt/")
+def qbt_index():
+    """Serve the qBittorrent Web UI through the hub."""
+    return _proxy_qbt("")
+
+@app.route("/qbt/<path:subpath>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+def qbt_proxy(subpath):
+    return _proxy_qbt(subpath)
+
+def _proxy_qbt(subpath):
+    url = f"{QBT_UPSTREAM}/{subpath}"
+    if request.query_string:
+        url += "?" + request.query_string.decode()
+
+    headers = {k: v for k, v in request.headers if k.lower() not in ("host", "transfer-encoding")}
+
+    try:
+        resp = http_requests.request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            data=request.get_data(),
+            cookies=request.cookies,
+            allow_redirects=False,
+            timeout=30,
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Cannot reach qBittorrent: {e}"}), 502
+
+    # Build response, rewriting Location headers and cookie paths
+    excluded_headers = {"transfer-encoding", "content-encoding", "content-length"}
+    resp_headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded_headers]
+
+    # Rewrite Location header to add /qbt prefix
+    final_headers = []
+    for k, v in resp_headers:
+        if k.lower() == "location" and v.startswith("/"):
+            v = "/qbt" + v
+        final_headers.append((k, v))
+
+    return Response(resp.content, status=resp.status_code, headers=final_headers)
 
 
 @app.route("/pi/reboot", methods=["POST"])
