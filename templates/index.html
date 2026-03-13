@@ -100,6 +100,47 @@
     <section class="card">
       <div class="card-header">
         <div>
+          <h2><i class="fa-solid fa-shield-halved"></i> NordVPN</h2>
+          <p class="subtle mb-0">Control the VPN connection on this Pi.</p>
+        </div>
+      </div>
+      <div class="kv">
+        <div><i class="fa-solid fa-circle" id="vpn-dot" style="color:{% if vpn.connected %}#16a34a{% else %}#dc2626{% endif %}"></i> Status</div>
+        <div id="vpn-status">{{ vpn.status }}{% if vpn.country %} ({{ vpn.country }}{% if vpn.city %}, {{ vpn.city }}{% endif %}){% endif %}</div>
+      </div>
+      <div class="kv">
+        <div><i class="fa-solid fa-network-wired"></i> Server IP</div>
+        <div id="vpn-ip">{{ vpn.ip or 'N/A' }}</div>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="vpn-country" style="padding:8px 10px;border-radius:10px;border:1px solid var(--border);font-size:14px">
+            <option value="">Auto (fastest)</option>
+            <option value="United_States">United States</option>
+            <option value="Canada">Canada</option>
+            <option value="United_Kingdom">United Kingdom</option>
+            <option value="Germany">Germany</option>
+            <option value="Netherlands">Netherlands</option>
+            <option value="Switzerland">Switzerland</option>
+            <option value="Japan">Japan</option>
+            <option value="Australia">Australia</option>
+          </select>
+          <button type="button" id="vpn-connect-btn" class="btn-primary">
+            <i class="fa-solid fa-plug"></i> Connect
+          </button>
+          <button type="button" id="vpn-disconnect-btn" class="btn-danger">
+            <i class="fa-solid fa-plug-circle-xmark"></i> Disconnect
+          </button>
+        </div>
+      </div>
+      <div class="status">
+        <pre id="vpn-log" style="max-height:80px">Ready</pre>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <div>
           <h2><i class="fa-solid fa-scissors"></i> HandBrake</h2>
           <p class="subtle mb-0">
             Defaults output to <code>/mnt/ssd/Movies</code> (Windows: <code>\\mpk-pi\PiSSD\Movies</code>).

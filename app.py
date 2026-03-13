@@ -155,6 +155,32 @@ def load_myflow_deploy():
     return {"status": "idle"}
 
 
+def nordvpn_status():
+    """Get NordVPN connection status."""
+    info = {"connected": False, "status": "unknown", "country": None, "ip": None}
+    try:
+        result = subprocess.run(
+            ["nordvpn", "status"],
+            capture_output=True, text=True, timeout=5,
+        )
+        output = result.stdout
+        for line in output.splitlines():
+            line = line.strip()
+            if line.startswith("Status:"):
+                val = line.split(":", 1)[1].strip()
+                info["status"] = val
+                info["connected"] = "connect" in val.lower()
+            elif line.startswith("Country:"):
+                info["country"] = line.split(":", 1)[1].strip()
+            elif line.startswith("Server IP:") or line.startswith("IP:"):
+                info["ip"] = line.split(":", 1)[1].strip()
+            elif line.startswith("City:"):
+                info["city"] = line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return info
+
+
 def myflow_service_status():
     """Get MyFlow systemd service status and last git pull info."""
     info = {"active": False, "status": "unknown", "last_pull": None, "commit": None}
@@ -222,6 +248,7 @@ def index():
         baseball_url=BASEBALL_PUBLIC_URL,
         myflow_url=MYFLOW_PUBLIC_URL,
         myflow=myflow_service_status(),
+        vpn=nordvpn_status(),
     )
 
 
@@ -430,6 +457,38 @@ def myflow_deploy_status():
             save_myflow_deploy(job)
     log_text = tail_file(job.get("log_path", "")) if job.get("log_path") else ""
     return jsonify({"job": job, "log_tail": log_text})
+
+
+@app.route("/vpn/status")
+def vpn_status_api():
+    return jsonify(nordvpn_status())
+
+
+@app.route("/vpn/connect", methods=["POST"])
+def vpn_connect():
+    country = request.form.get("country", "").strip()
+    cmd = ["nordvpn", "connect"]
+    if country:
+        cmd.append(country)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        output = result.stdout + result.stderr
+        return jsonify({"ok": result.returncode == 0, "output": output.strip()})
+    except Exception as e:
+        return jsonify({"ok": False, "output": str(e)}), 500
+
+
+@app.route("/vpn/disconnect", methods=["POST"])
+def vpn_disconnect():
+    try:
+        result = subprocess.run(
+            ["nordvpn", "disconnect"],
+            capture_output=True, text=True, timeout=15,
+        )
+        output = result.stdout + result.stderr
+        return jsonify({"ok": result.returncode == 0, "output": output.strip()})
+    except Exception as e:
+        return jsonify({"ok": False, "output": str(e)}), 500
 
 
 @app.route("/scan")

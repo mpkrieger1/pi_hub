@@ -133,6 +133,51 @@ piRebootBtn.addEventListener("click", async () => {
   await fetch("/pi/reboot", { method: "POST" });
 });
 
+// ── NordVPN ──
+const vpnConnectBtn = document.getElementById("vpn-connect-btn");
+const vpnDisconnectBtn = document.getElementById("vpn-disconnect-btn");
+const vpnCountry = document.getElementById("vpn-country");
+const vpnStatus = document.getElementById("vpn-status");
+const vpnIp = document.getElementById("vpn-ip");
+const vpnDot = document.getElementById("vpn-dot");
+const vpnLog = document.getElementById("vpn-log");
+
+if (vpnConnectBtn) {
+  vpnConnectBtn.addEventListener("click", async () => {
+    vpnLog.textContent = "Connecting...";
+    const fd = new FormData();
+    fd.append("country", vpnCountry.value);
+    const res = await fetch("/vpn/connect", { method: "POST", body: fd });
+    const data = await res.json();
+    vpnLog.textContent = data.output || (data.ok ? "Connected" : "Failed");
+    fetchVpnStatus();
+  });
+}
+
+if (vpnDisconnectBtn) {
+  vpnDisconnectBtn.addEventListener("click", async () => {
+    vpnLog.textContent = "Disconnecting...";
+    const res = await fetch("/vpn/disconnect", { method: "POST" });
+    const data = await res.json();
+    vpnLog.textContent = data.output || (data.ok ? "Disconnected" : "Failed");
+    fetchVpnStatus();
+  });
+}
+
+async function fetchVpnStatus() {
+  try {
+    const res = await fetch("/vpn/status");
+    const data = await res.json();
+    if (vpnStatus) {
+      let text = data.status;
+      if (data.country) text += " (" + data.country + (data.city ? ", " + data.city : "") + ")";
+      vpnStatus.textContent = text;
+    }
+    if (vpnIp) vpnIp.textContent = data.ip || "N/A";
+    if (vpnDot) vpnDot.style.color = data.connected ? "#16a34a" : "#dc2626";
+  } catch (e) {}
+}
+
 // ── Baseball Sim Deploy ──
 const deployBtn = document.getElementById("deploy-btn");
 const deployStatus = document.getElementById("deploy-status");
@@ -200,7 +245,9 @@ setInterval(fetchStatus, 5000);
 setInterval(fetchDeployStatus, 5000);
 setInterval(fetchMyFlowDeployStatus, 5000);
 setInterval(fetchMyFlowServiceStatus, 15000);
+setInterval(fetchVpnStatus, 10000);
 fetchStatus();
 fetchDeployStatus();
 fetchMyFlowDeployStatus();
 fetchMyFlowServiceStatus();
+fetchVpnStatus();
