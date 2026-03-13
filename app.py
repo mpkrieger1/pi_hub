@@ -21,6 +21,8 @@ MLB_DB_PATH = "/mnt/ssd/data/baseball_sim/mlb.sqlite"
 HUB_PUBLIC_URL = "https://hub.thedataball.com"
 BASEBALL_PUBLIC_URL = "https://thedataball.com"
 MYFLOW_PUBLIC_URL = "https://reports.k-analytics.co"
+APPS_DIR = Path("/home/mpkrieger1/apps")
+APPS_CONFIG = DATA_DIR / "apps.json"
 
 ALLOWED_OUTPUT_DIRS = {
     "movies": "/mnt/ssd/Movies",
@@ -641,6 +643,323 @@ def start_next_title(job):
     job["cmd"] = " ".join(cmd)
     save_job(job)
     return job
+
+
+# ═══════════════════════════════════════════════════════════════
+# APP MANAGER
+# ═══════════════════════════════════════════════════════════════
+
+def load_apps():
+    if APPS_CONFIG.exists():
+        try:
+            return json.loads(APPS_CONFIG.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def save_apps(apps):
+    APPS_CONFIG.write_text(json.dumps(apps, indent=2))
+
+
+def app_deploy_file(slug):
+    return JOBS_DIR / f"app_deploy_{slug}.json"
+
+
+def load_app_deploy(slug):
+    f = app_deploy_file(slug)
+    if f.exists():
+        try:
+            return json.loads(f.read_text())
+        except Exception:
+            return {"status": "idle"}
+    return {"status": "idle"}
+
+
+def save_app_deploy(slug, job):
+    app_deploy_file(slug).write_text(json.dumps(job, indent=2))
+
+
+def get_app_status(app_config):
+    """Get live status for a managed app."""
+    slug = app_config["slug"]
+    info = dict(app_config)
+    info["service_status"] = "unknown"
+    info["active"] = False
+    info["commit"] = None
+    info["commit_msg"] = None
+    info["commit_age"] = None
+
+    service = app_config.get("service_name")
+    if service:
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", service],
+                capture_output=True, text=True, timeout=5,
+            )
+            status = result.stdout.strip()
+            info["service_status"] = status
+            info["active"] = status == "active"
+        except Exception:
+            pass
+
+    repo_dir = app_config.get("repo_dir")
+    if repo_dir and Path(repo_dir).exists():
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%H|%s|%ar"],
+                capture_output=True, text=True, timeout=5,
+                cwd=repo_dir,
+            )
+            if result.returncode == 0:
+                parts = result.stdout.strip().split("|", 2)
+                if len(parts) == 3:
+                    info["commit"] = parts[0][:8]
+                    info["commit_msg"] = parts[1]
+                    info["commit_age"] = parts[2]
+        except Exception:
+            pass
+
+    return info
+
+
+@app.route("/apps")
+def apps_page():
+    apps = load_apps()
+    app_list = []
+    for slug, cfg in apps.items():
+        cfg["slug"] = slug
+        app_list.append(get_app_status(cfg))
+    return render_template("apps.html", app_name=APP_NAME, apps=app_list)
+
+
+@app.route("/apps/list")
+def apps_list_api():
+    apps = load_apps()
+    result = []
+    for slug, cfg in apps.items():
+        cfg["slug"] = slug
+        result.append(get_app_status(cfg))
+    return jsonify(result)
+
+
+@app.route("/apps/create", methods=["POST"])
+def apps_create():
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    repo_url = data.get("repo_url", "").strip()
+    port = data.get("port", "").strip()
+    app_type = data.get("app_type", "python")  # python, node, static
+    start_cmd = data.get("start_cmd", "").strip()
+    public_url = data.get("public_url", "").strip()
+
+    if not name or not repo_url:
+        return jsonify({"ok": False, "error": "Name and repo URL required."}), 400
+
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if not slug:
+        return jsonify({"ok": False, "error": "Invalid name."}), 400
+
+    apps = load_apps()
+    if slug in apps:
+        return jsonify({"ok": False, "error": f"App '{slug}' already exists."}), 409
+
+    app_dir = str(APPS_DIR / slug)
+    repo_dir = str(APPS_DIR / slug / "repo")
+
+    # Build the deploy command
+    setup_cmds = [f"mkdir -p {app_dir}"]
+    setup_cmds.append(f"git clone {repo_url} {repo_dir}")
+
+    if app_type == "python":
+        setup_cmds.append(f"cd {repo_dir} && python3 -m venv .venv")
+        setup_cmds.append(f"cd {repo_dir} && .venv/bin/pip install --upgrade pip -q")
+        setup_cmds.append(f"cd {repo_dir} && .venv/bin/pip install -r requirements.txt -q")
+    elif app_type == "node":
+        setup_cmds.append(f"cd {repo_dir} && npm install")
+
+    # Determine the start command for systemd
+    if not start_cmd:
+        if app_type == "python":
+            start_cmd = f"{repo_dir}/.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port {port or '8000'}"
+        elif app_type == "node":
+            start_cmd = f"npm start"
+
+    service_name = f"app-{slug}"
+
+    # Build systemd service content
+    service_content = f"""[Unit]
+Description={name}
+After=network.target
+
+[Service]
+User=mpkrieger1
+WorkingDirectory={repo_dir}
+ExecStart={start_cmd}
+Restart=on-failure
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    full_cmd = " && ".join(setup_cmds)
+    full_cmd += f' && echo \'{service_content}\' | sudo tee /etc/systemd/system/{service_name}.service > /dev/null'
+    full_cmd += f" && sudo systemctl daemon-reload && sudo systemctl enable {service_name} && sudo systemctl start {service_name}"
+
+    log_path = str(LOG_DIR / f"app_create_{slug}_{int(time.time())}.log")
+
+    with open(log_path, "a") as log:
+        proc = subprocess.Popen(
+            ["bash", "-lc", full_cmd],
+            stdout=log, stderr=log,
+        )
+
+    deploy_job = {
+        "status": "running",
+        "pid": proc.pid,
+        "started_at": int(time.time()),
+        "log_path": log_path,
+        "action": "create",
+    }
+    save_app_deploy(slug, deploy_job)
+
+    apps[slug] = {
+        "name": name,
+        "repo_url": repo_url,
+        "repo_dir": repo_dir,
+        "app_dir": app_dir,
+        "port": port or "",
+        "app_type": app_type,
+        "start_cmd": start_cmd,
+        "service_name": service_name,
+        "public_url": public_url,
+        "created_at": int(time.time()),
+    }
+    save_apps(apps)
+
+    return jsonify({"ok": True, "slug": slug, "job": deploy_job})
+
+
+@app.route("/apps/<slug>/pull", methods=["POST"])
+def apps_pull(slug):
+    apps = load_apps()
+    if slug not in apps:
+        return jsonify({"ok": False, "error": "App not found."}), 404
+
+    cfg = apps[slug]
+    repo_dir = cfg["repo_dir"]
+    app_type = cfg.get("app_type", "python")
+    service_name = cfg.get("service_name", f"app-{slug}")
+
+    cmds = [
+        f"cd {repo_dir}",
+        "git fetch --all",
+        "git reset --hard origin/main",
+        "git clean -fd",
+    ]
+    if app_type == "python":
+        cmds.append(".venv/bin/pip install -r requirements.txt -q")
+    elif app_type == "node":
+        cmds.append("npm install")
+
+    cmds.append(f"sudo /bin/systemctl restart {service_name}")
+
+    log_path = str(LOG_DIR / f"app_pull_{slug}_{int(time.time())}.log")
+    full_cmd = " && ".join(cmds)
+
+    with open(log_path, "a") as log:
+        proc = subprocess.Popen(
+            ["bash", "-lc", full_cmd],
+            cwd=repo_dir, stdout=log, stderr=log,
+        )
+
+    job = {
+        "status": "running",
+        "pid": proc.pid,
+        "started_at": int(time.time()),
+        "log_path": log_path,
+        "action": "pull",
+    }
+    save_app_deploy(slug, job)
+    return jsonify({"ok": True, "job": job})
+
+
+@app.route("/apps/<slug>/start", methods=["POST"])
+def apps_start(slug):
+    apps = load_apps()
+    if slug not in apps:
+        return jsonify({"ok": False, "error": "App not found."}), 404
+    service = apps[slug].get("service_name", f"app-{slug}")
+    try:
+        subprocess.run(["sudo", "/bin/systemctl", "start", service], timeout=10)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/apps/<slug>/stop", methods=["POST"])
+def apps_stop(slug):
+    apps = load_apps()
+    if slug not in apps:
+        return jsonify({"ok": False, "error": "App not found."}), 404
+    service = apps[slug].get("service_name", f"app-{slug}")
+    try:
+        subprocess.run(["sudo", "/bin/systemctl", "stop", service], timeout=10)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/apps/<slug>/restart", methods=["POST"])
+def apps_restart(slug):
+    apps = load_apps()
+    if slug not in apps:
+        return jsonify({"ok": False, "error": "App not found."}), 404
+    service = apps[slug].get("service_name", f"app-{slug}")
+    try:
+        subprocess.run(["sudo", "/bin/systemctl", "restart", service], timeout=10)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/apps/<slug>/deploy-status")
+def apps_deploy_status(slug):
+    job = load_app_deploy(slug)
+    if job.get("status") == "running":
+        pid = job.get("pid")
+        if pid and os.path.exists(f"/proc/{pid}"):
+            job["running"] = True
+        else:
+            job["running"] = False
+            job["status"] = "finished"
+            save_app_deploy(slug, job)
+    log_text = tail_file(job.get("log_path", "")) if job.get("log_path") else ""
+    return jsonify({"job": job, "log_tail": log_text})
+
+
+@app.route("/apps/<slug>/delete", methods=["POST"])
+def apps_delete(slug):
+    apps = load_apps()
+    if slug not in apps:
+        return jsonify({"ok": False, "error": "App not found."}), 404
+
+    cfg = apps[slug]
+    service = cfg.get("service_name", f"app-{slug}")
+
+    # Stop and disable service
+    try:
+        subprocess.run(["sudo", "/bin/systemctl", "stop", service], timeout=10)
+        subprocess.run(["sudo", "/bin/systemctl", "disable", service], timeout=10)
+        subprocess.run(["sudo", "rm", f"/etc/systemd/system/{service}.service"], timeout=5)
+        subprocess.run(["sudo", "/bin/systemctl", "daemon-reload"], timeout=10)
+    except Exception:
+        pass
+
+    del apps[slug]
+    save_apps(apps)
+    return jsonify({"ok": True})
 
 
 @app.route("/pi/reboot", methods=["POST"])

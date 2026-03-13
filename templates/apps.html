@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ app_name }} — App Manager</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="mb-4 d-flex align-items-center justify-content-between">
+      <div class="d-flex align-items-center gap-3">
+        <a href="/" class="hub-icon" style="text-decoration:none">
+          <i class="fa-solid fa-arrow-left"></i>
+        </a>
+        <div>
+          <h1 class="mb-1">App Manager</h1>
+          <div class="subtle">Deploy and manage apps on your Pi</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- New App Form -->
+    <section class="card" style="margin-bottom:16px">
+      <h2><i class="fa-solid fa-plus-circle"></i> Deploy New App</h2>
+      <form id="new-app-form">
+        <div class="row">
+          <label>
+            App Name
+            <input type="text" id="app-name" placeholder="My App" required />
+          </label>
+          <label>
+            GitHub Repo URL
+            <input type="text" id="app-repo" placeholder="https://github.com/user/repo.git" required />
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            Type
+            <select id="app-type">
+              <option value="python">Python (pip + uvicorn)</option>
+              <option value="node">Node.js (npm)</option>
+              <option value="static">Static / Custom</option>
+            </select>
+          </label>
+          <label>
+            Port
+            <input type="text" id="app-port" placeholder="8000" />
+          </label>
+        </div>
+        <div class="row">
+          <label class="grow">
+            Start Command <small class="subtle">(optional — auto-detected from type)</small>
+            <input type="text" id="app-start-cmd" placeholder="e.g. .venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000" />
+          </label>
+        </div>
+        <div class="row">
+          <label class="grow">
+            Public URL <small class="subtle">(optional — for quick link)</small>
+            <input type="text" id="app-public-url" placeholder="https://myapp.example.com" />
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn-primary">
+            <i class="fa-solid fa-rocket"></i> Clone & Deploy
+          </button>
+        </div>
+      </form>
+      <div class="status">
+        <pre id="create-log" style="max-height:120px">Ready</pre>
+      </div>
+    </section>
+
+    <!-- Deployed Apps -->
+    <section id="apps-list">
+      {% for app in apps %}
+      <div class="card app-card" data-slug="{{ app.slug }}" style="margin-bottom:16px">
+        <div class="card-header">
+          <div>
+            <h2>
+              <i class="fa-solid fa-circle" style="font-size:12px;color:{{ '#16a34a' if app.active else '#dc2626' }}"></i>
+              {{ app.name }}
+            </h2>
+            <p class="subtle mb-0">
+              {{ app.repo_url }}
+              {% if app.public_url %}
+                · <a href="{{ app.public_url }}" target="_blank">{{ app.public_url }}</a>
+              {% endif %}
+              {% if app.port %}
+                · port {{ app.port }}
+              {% endif %}
+            </p>
+          </div>
+        </div>
+        <div class="kv">
+          <div><i class="fa-solid fa-gear"></i> Service</div>
+          <div class="svc-status">{{ app.service_status }} ({{ app.service_name }})</div>
+        </div>
+        <div class="kv">
+          <div><i class="fa-solid fa-code-commit"></i> Commit</div>
+          <div class="commit-info">{% if app.commit %}{{ app.commit }} — {{ app.commit_msg }} ({{ app.commit_age }}){% else %}unknown{% endif %}</div>
+        </div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn-info app-pull-btn" data-slug="{{ app.slug }}">
+            <i class="fa-solid fa-cloud-arrow-down"></i> Pull & Redeploy
+          </button>
+          <button class="btn-primary app-start-btn" data-slug="{{ app.slug }}">
+            <i class="fa-solid fa-play"></i> Start
+          </button>
+          <button class="btn-warn app-stop-btn" data-slug="{{ app.slug }}">
+            <i class="fa-solid fa-stop"></i> Stop
+          </button>
+          <button class="btn-secondary app-restart-btn" data-slug="{{ app.slug }}">
+            <i class="fa-solid fa-rotate"></i> Restart
+          </button>
+          <button class="btn-danger app-delete-btn" data-slug="{{ app.slug }}">
+            <i class="fa-solid fa-trash"></i> Delete
+          </button>
+        </div>
+        <div class="status">
+          <pre class="app-deploy-log" style="max-height:120px">Idle</pre>
+        </div>
+      </div>
+      {% endfor %}
+      {% if not apps %}
+      <div class="card" id="no-apps-msg">
+        <p class="subtle" style="margin:0;text-align:center">No apps deployed yet. Use the form above to get started.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <script>
+      // ── Create New App ──
+      const createForm = document.getElementById("new-app-form");
+      const createLog = document.getElementById("create-log");
+      let creatingSlug = null;
+
+      createForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        createLog.textContent = "Cloning and setting up...";
+        const payload = {
+          name: document.getElementById("app-name").value,
+          repo_url: document.getElementById("app-repo").value,
+          port: document.getElementById("app-port").value,
+          app_type: document.getElementById("app-type").value,
+          start_cmd: document.getElementById("app-start-cmd").value,
+          public_url: document.getElementById("app-public-url").value,
+        };
+        const res = await fetch("/apps/create", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          createLog.textContent = "Error: " + (data.error || "Unknown error");
+          return;
+        }
+        creatingSlug = data.slug;
+        pollCreateStatus();
+      });
+
+      async function pollCreateStatus() {
+        if (!creatingSlug) return;
+        const res = await fetch("/apps/" + creatingSlug + "/deploy-status");
+        const data = await res.json();
+        createLog.textContent = data.log_tail || JSON.stringify(data.job, null, 2);
+        if (data.job.status === "running") {
+          setTimeout(pollCreateStatus, 2000);
+        } else {
+          creatingSlug = null;
+          createLog.textContent += "\n\nDone! Reloading...";
+          setTimeout(() => location.reload(), 1500);
+        }
+      }
+
+      // ── App Actions ──
+      document.addEventListener("click", async (e) => {
+        const btn = e.target.closest("button[data-slug]");
+        if (!btn) return;
+        const slug = btn.dataset.slug;
+        const card = btn.closest(".app-card");
+        const log = card ? card.querySelector(".app-deploy-log") : null;
+
+        if (btn.classList.contains("app-pull-btn")) {
+          if (!confirm("Pull & redeploy " + slug + "?")) return;
+          if (log) log.textContent = "Starting pull...";
+          await fetch("/apps/" + slug + "/pull", { method: "POST" });
+          pollAppDeploy(slug, log);
+        } else if (btn.classList.contains("app-start-btn")) {
+          await fetch("/apps/" + slug + "/start", { method: "POST" });
+          if (log) log.textContent = "Start requested.";
+          setTimeout(() => refreshApp(slug, card), 1500);
+        } else if (btn.classList.contains("app-stop-btn")) {
+          await fetch("/apps/" + slug + "/stop", { method: "POST" });
+          if (log) log.textContent = "Stop requested.";
+          setTimeout(() => refreshApp(slug, card), 1500);
+        } else if (btn.classList.contains("app-restart-btn")) {
+          await fetch("/apps/" + slug + "/restart", { method: "POST" });
+          if (log) log.textContent = "Restart requested.";
+          setTimeout(() => refreshApp(slug, card), 2000);
+        } else if (btn.classList.contains("app-delete-btn")) {
+          if (!confirm("Delete app '" + slug + "'? This stops the service and removes the config.")) return;
+          await fetch("/apps/" + slug + "/delete", { method: "POST" });
+          if (card) card.remove();
+        }
+      });
+
+      async function pollAppDeploy(slug, logEl) {
+        const res = await fetch("/apps/" + slug + "/deploy-status");
+        const data = await res.json();
+        if (logEl) logEl.textContent = data.log_tail || JSON.stringify(data.job, null, 2);
+        if (data.job.status === "running") {
+          setTimeout(() => pollAppDeploy(slug, logEl), 2000);
+        } else {
+          setTimeout(() => location.reload(), 1500);
+        }
+      }
+
+      async function refreshApp(slug, card) {
+        const res = await fetch("/apps/list");
+        const apps = await res.json();
+        const app = apps.find(a => a.slug === slug);
+        if (!app || !card) return;
+        const dot = card.querySelector("h2 i.fa-circle");
+        if (dot) dot.style.color = app.active ? "#16a34a" : "#dc2626";
+        const svc = card.querySelector(".svc-status");
+        if (svc) svc.textContent = app.service_status + " (" + app.service_name + ")";
+        const commit = card.querySelector(".commit-info");
+        if (commit && app.commit) commit.textContent = app.commit + " — " + (app.commit_msg||"") + " (" + (app.commit_age||"") + ")";
+      }
+
+      // Periodic refresh
+      setInterval(async () => {
+        const res = await fetch("/apps/list");
+        const apps = await res.json();
+        apps.forEach(app => {
+          const card = document.querySelector(`.app-card[data-slug="${app.slug}"]`);
+          if (card) refreshApp(app.slug, card);
+        });
+      }, 10000);
+    </script>
+  </body>
+</html>
