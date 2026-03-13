@@ -1,0 +1,13 @@
+[Unit]
+Description=Pi Hub Web UI
+After=network.target
+
+[Service]
+User=mpkrieger1
+WorkingDirectory=/home/mpkrieger1/hub
+ExecStart=/home/mpkrieger1/hub/.venv/bin/python /home/mpkrieger1/hub/app.py
+Restart=on-failure
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
