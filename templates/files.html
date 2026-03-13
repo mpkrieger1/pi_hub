@@ -239,6 +239,7 @@
             <div class="meta">${item.is_dir ? "" : formatSize(item.size)} ${formatDate(item.modified)}</div>
             <div class="file-actions">
               ${!item.is_dir ? `<button class="icon-btn" title="Download" data-action="download" data-path="${relPath}"><i class="fa-solid fa-download"></i></button>` : ""}
+              <button class="icon-btn" title="Move" data-action="move" data-path="${relPath}" data-name="${item.name}"><i class="fa-solid fa-arrows-up-down-left-right"></i></button>
               <button class="icon-btn" title="Rename" data-action="rename" data-path="${relPath}" data-name="${item.name}"><i class="fa-solid fa-pen"></i></button>
               <button class="icon-btn danger" title="Delete" data-action="delete" data-path="${relPath}" data-name="${item.name}"><i class="fa-solid fa-trash"></i></button>
             </div>
@@ -291,6 +292,8 @@
           window.open(`/files/download?root=${encodeURIComponent(currentRoot)}&path=${encodeURIComponent(path)}`);
         } else if (action === "rename") {
           showRenameModal(path, name);
+        } else if (action === "move") {
+          showMoveModal([path]);
         } else if (action === "delete") {
           if (!confirm(`Delete "${name}"?`)) return;
           const res = await fetch("/files/delete", {
@@ -356,23 +359,29 @@
         browse();
       });
 
-      // Bulk move
-      moveBtn.addEventListener("click", () => {
+      // Move modal (works for single file or bulk)
+      function showMoveModal(paths) {
+        document.getElementById("move-dest").value = currentPath;
         document.getElementById("move-modal").classList.add("show");
         document.getElementById("move-dest").focus();
         document.getElementById("move-confirm").onclick = async () => {
           const dest = document.getElementById("move-dest").value.trim();
           closeModal("move-modal");
-          for (const path of selectedFiles) {
+          for (const p of paths) {
             await fetch("/files/move", {
               method: "POST",
               headers: {"Content-Type": "application/json"},
-              body: JSON.stringify({ root: currentRoot, path: path, dest: dest }),
+              body: JSON.stringify({ root: currentRoot, path: p, dest: dest }),
             });
           }
           selectedFiles.clear();
           browse();
         };
+      }
+
+      // Bulk move
+      moveBtn.addEventListener("click", () => {
+        showMoveModal([...selectedFiles]);
       });
 
       // Upload via drop zone
