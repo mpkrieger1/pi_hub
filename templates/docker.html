@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ app_name }} — Docker Manager</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+    <link rel="stylesheet" href="/static/style.css" />
+    <style>
+      .container-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto auto;
+        gap: 12px; align-items: center;
+        padding: 10px 14px; border-radius: 10px;
+        border: 1px solid var(--border); background: #f8fafc;
+        margin-bottom: 6px; font-size: 14px;
+      }
+      .container-row .name-col { overflow: hidden; }
+      .container-row .name-col h3 { font-size: 15px; margin: 0; display: flex; align-items: center; gap: 8px; }
+      .container-row .name-col .subtle { margin: 2px 0 0; font-size: 12px; }
+      .status-badge {
+        display: inline-block; padding: 3px 10px; border-radius: 20px;
+        font-size: 12px; font-weight: 600; text-transform: capitalize; white-space: nowrap;
+      }
+      .status-badge.running { background: #dcfce7; color: #166534; }
+      .status-badge.exited, .status-badge.stopped { background: #fee2e2; color: #991b1b; }
+      .status-badge.created, .status-badge.restarting { background: #fef9c3; color: #854d0e; }
+      .status-badge.paused { background: #e0e7ff; color: #3730a3; }
+      .row-actions { display: flex; gap: 4px; }
+      .row-actions button { padding: 6px 10px; font-size: 12px; }
+      .log-overlay {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5); display: none; place-items: center; z-index: 200;
+      }
+      .log-overlay.show { display: grid; }
+      .log-box {
+        background: #0f172a; border-radius: 16px; padding: 16px;
+        width: min(90vw, 900px); height: min(80vh, 600px);
+        display: flex; flex-direction: column;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+      }
+      .log-box .log-header {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 8px; color: #94a3b8; font-size: 14px;
+      }
+      .log-box .log-header .close-log {
+        background: none; border: none; color: #94a3b8; font-size: 18px;
+        cursor: pointer; padding: 4px 8px;
+      }
+      .log-box .log-header .close-log:hover { color: #fff; }
+      .log-box pre {
+        flex: 1; margin: 0; overflow: auto; font-size: 12px;
+        max-height: none; background: transparent; padding: 0;
+      }
+      .log-box .log-actions { display: flex; gap: 8px; margin-top: 8px; }
+      .log-box .log-actions button { font-size: 12px; padding: 6px 12px; }
+      .install-section { margin-top: 16px; }
+      .template-grid {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 10px; margin-top: 12px;
+      }
+      .template-card {
+        border: 1px solid var(--border); border-radius: 12px; padding: 14px;
+        background: #f8fafc; cursor: pointer; transition: all 0.15s;
+      }
+      .template-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37,99,235,0.1); }
+      .template-card h4 { margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+      .template-card p { margin: 0; font-size: 12px; color: var(--muted); }
+      .install-overlay {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5); display: none; place-items: center; z-index: 200;
+      }
+      .install-overlay.show { display: grid; }
+      .install-box {
+        background: #fff; border-radius: 16px; padding: 24px; min-width: 420px; max-width: 560px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+      }
+      .install-box h3 { margin: 0 0 16px; }
+      .install-box label { margin-bottom: 8px; }
+      .install-box .install-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <header class="mb-4 d-flex align-items-center justify-content-between">
+      <div class="d-flex align-items-center gap-3">
+        <a href="/" class="hub-icon" style="text-decoration:none">
+          <i class="fa-solid fa-arrow-left"></i>
+        </a>
+        <div>
+          <h1 class="mb-1">Docker Manager</h1>
+          <div class="subtle">Manage Docker containers on your Pi</div>
+        </div>
+      </div>
+      <button type="button" id="refresh-btn" class="btn-secondary btn-top">
+        <i class="fa-solid fa-rotate"></i> Refresh
+      </button>
+    </header>
+
+    <!-- Running Containers -->
+    <section class="card" style="margin-bottom:16px">
+      <h2><i class="fa-solid fa-cubes"></i> Containers</h2>
+      <div id="container-list">
+        <p class="subtle" style="text-align:center">Loading...</p>
+      </div>
+    </section>
+
+    <!-- Install New Container -->
+    <section class="card" style="margin-bottom:16px">
+      <h2><i class="fa-solid fa-plus-circle"></i> Quick Install</h2>
+      <p class="subtle">Click a template to install, or use the custom form below.</p>
+      <div class="template-grid" id="template-grid"></div>
+
+      <div class="install-section">
+        <h3 style="margin-top:20px"><i class="fa-solid fa-terminal"></i> Custom Container</h3>
+        <form id="custom-install-form">
+          <div class="row">
+            <label>
+              Container Name
+              <input type="text" id="ci-name" placeholder="my-app" required />
+            </label>
+            <label>
+              Image
+              <input type="text" id="ci-image" placeholder="nginx:latest" required />
+            </label>
+          </div>
+          <div class="row">
+            <label>
+              Ports <small class="subtle">(host:container, comma-separated)</small>
+              <input type="text" id="ci-ports" placeholder="8080:80, 8443:443" />
+            </label>
+            <label>
+              Volumes <small class="subtle">(host:container, comma-separated)</small>
+              <input type="text" id="ci-volumes" placeholder="/data:/app/data" />
+            </label>
+          </div>
+          <div class="row">
+            <label class="grow">
+              Environment Variables <small class="subtle">(KEY=VALUE, comma-separated)</small>
+              <input type="text" id="ci-env" placeholder="TZ=America/Denver, PUID=1000" />
+            </label>
+          </div>
+          <div class="row">
+            <label>
+              Network Mode
+              <select id="ci-network">
+                <option value="">Default (bridge)</option>
+                <option value="host">Host</option>
+              </select>
+            </label>
+            <label>
+              Restart Policy
+              <select id="ci-restart">
+                <option value="unless-stopped">Unless Stopped</option>
+                <option value="always">Always</option>
+                <option value="on-failure">On Failure</option>
+                <option value="no">No</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions" style="margin-top:8px">
+            <button type="submit" class="btn-primary">
+              <i class="fa-solid fa-play"></i> Pull & Run
+            </button>
+          </div>
+        </form>
+        <div class="status">
+          <pre id="install-log" style="max-height:120px">Ready</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Log Viewer Popup -->
+    <div class="log-overlay" id="log-overlay">
+      <div class="log-box">
+        <div class="log-header">
+          <span id="log-title">Container Logs</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;color:#94a3b8">
+              <input type="checkbox" id="log-follow" checked /> Follow
+            </label>
+            <button class="close-log" id="close-log">&times;</button>
+          </div>
+        </div>
+        <pre id="log-content">Loading...</pre>
+        <div class="log-actions">
+          <button class="btn-info" id="log-refresh-btn"><i class="fa-solid fa-rotate"></i> Refresh</button>
+          <select id="log-lines" style="padding:6px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#94a3b8;font-size:12px">
+            <option value="50">50 lines</option>
+            <option value="100" selected>100 lines</option>
+            <option value="500">500 lines</option>
+            <option value="1000">1000 lines</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Template Install Modal -->
+    <div class="install-overlay" id="install-overlay">
+      <div class="install-box">
+        <h3 id="install-title"><i class="fa-solid fa-download"></i> Install App</h3>
+        <div id="install-fields"></div>
+        <div class="status">
+          <pre id="install-modal-log" style="max-height:100px;font-size:11px">Ready</pre>
+        </div>
+        <div class="install-actions">
+          <button class="btn-secondary" onclick="closeOverlay('install-overlay')" style="padding:6px 16px;font-size:14px">Cancel</button>
+          <button class="btn-primary" id="install-confirm" style="padding:6px 16px;font-size:14px">
+            <i class="fa-solid fa-play"></i> Install
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ── App Templates ──
+      const TEMPLATES = [
+        {
+          name: "Portainer",
+          icon: "fa-server",
+          description: "Docker management web UI",
+          image: "portainer/portainer-ce:latest",
+          ports: ["9000:9000"],
+          volumes: ["/var/run/docker.sock:/var/run/docker.sock", "portainer_data:/data"],
+          restart: "unless-stopped",
+        },
+        {
+          name: "Nginx",
+          icon: "fa-globe",
+          description: "Web server / reverse proxy",
+          image: "nginx:latest",
+          ports: ["8090:80"],
+          volumes: [],
+          restart: "unless-stopped",
+        },
+        {
+          name: "Pi-hole",
+          icon: "fa-shield-halved",
+          description: "Network-wide ad blocker",
+          image: "pihole/pihole:latest",
+          ports: ["53:53/tcp", "53:53/udp", "8088:80"],
+          env: ["TZ=America/Denver"],
+          restart: "unless-stopped",
+        },
+        {
+          name: "Watchtower",
+          icon: "fa-tower-observation",
+          description: "Auto-update Docker containers",
+          image: "containrrr/watchtower:latest",
+          volumes: ["/var/run/docker.sock:/var/run/docker.sock"],
+          restart: "unless-stopped",
+        },
+        {
+          name: "Home Assistant",
+          icon: "fa-house-signal",
+          description: "Home automation platform",
+          image: "ghcr.io/home-assistant/home-assistant:stable",
+          network: "host",
+          volumes: ["/home/mpkrieger1/homeassistant:/config"],
+          env: ["TZ=America/Denver"],
+          restart: "unless-stopped",
+        },
+        {
+          name: "Uptime Kuma",
+          icon: "fa-heart-pulse",
+          description: "Uptime monitoring tool",
+          image: "louislam/uptime-kuma:latest",
+          ports: ["3003:3001"],
+          volumes: ["uptime-kuma:/app/data"],
+          restart: "unless-stopped",
+        },
+        {
+          name: "FileBrowser",
+          icon: "fa-folder-tree",
+          description: "Web-based file manager",
+          image: "filebrowser/filebrowser:latest",
+          ports: ["8085:80"],
+          volumes: ["/mnt/ssd:/srv", "filebrowser_db:/database"],
+          restart: "unless-stopped",
+        },
+        {
+          name: "Homarr",
+          icon: "fa-grip",
+          description: "Sleek dashboard for services",
+          image: "ghcr.io/ajnart/homarr:latest",
+          ports: ["7575:7575"],
+          volumes: ["/var/run/docker.sock:/var/run/docker.sock", "homarr_config:/app/data/configs"],
+          restart: "unless-stopped",
+        },
+      ];
+
+      const containerList = document.getElementById("container-list");
+      const templateGrid = document.getElementById("template-grid");
+      const installLog = document.getElementById("install-log");
+
+      let logInterval = null;
+      let logContainer = null;
+
+      // ── Render Templates ──
+      TEMPLATES.forEach((tpl, i) => {
+        const card = document.createElement("div");
+        card.className = "template-card";
+        card.innerHTML = `
+          <h4><i class="fa-solid ${tpl.icon}"></i> ${tpl.name}</h4>
+          <p>${tpl.description}</p>
+        `;
+        card.addEventListener("click", () => showInstallModal(tpl));
+        templateGrid.appendChild(card);
+      });
+
+      // ── Fetch Containers ──
+      async function fetchContainers() {
+        try {
+          const res = await fetch("/docker/list");
+          const data = await res.json();
+          renderContainers(data);
+        } catch (e) {
+          containerList.innerHTML = '<p class="subtle">Failed to load containers.</p>';
+        }
+      }
+
+      function renderContainers(containers) {
+        if (!containers.length) {
+          containerList.innerHTML = '<p class="subtle" style="text-align:center">No containers found.</p>';
+          return;
+        }
+        containerList.innerHTML = "";
+        containers.forEach(c => {
+          const stateClass = c.state || "unknown";
+          const row = document.createElement("div");
+          row.className = "container-row";
+
+          const portsStr = (c.ports || []).join(", ") || "none";
+          const launchPort = (c.ports || []).find(p => p.includes("->"));
+          let launchBtn = "";
+          if (launchPort && c.state === "running") {
+            const hostPort = launchPort.split(":")[1]?.split("->")[0] || "";
+            if (hostPort) {
+              launchBtn = `<a href="http://${location.hostname}:${hostPort}" target="_blank" class="icon-btn" title="Open in browser" style="text-decoration:none"><i class="fa-solid fa-up-right-from-square"></i></a>`;
+            }
+          }
+
+          row.innerHTML = `
+            <div class="name-col">
+              <h3>
+                ${c.name}
+                <span class="status-badge ${stateClass}">${c.state}</span>
+                ${launchBtn}
+              </h3>
+              <p class="subtle">${c.image} &middot; Ports: ${portsStr}</p>
+            </div>
+            <div class="meta" style="white-space:nowrap;font-size:12px;color:var(--muted)">${c.status}</div>
+            <div class="row-actions">
+              ${c.state === "running" ? `
+                <button class="btn-warn" data-id="${c.id}" data-action="stop"><i class="fa-solid fa-stop"></i></button>
+                <button class="btn-secondary" data-id="${c.id}" data-action="restart"><i class="fa-solid fa-rotate"></i></button>
+              ` : `
+                <button class="btn-primary" data-id="${c.id}" data-action="start"><i class="fa-solid fa-play"></i></button>
+              `}
+              <button class="btn-info" data-id="${c.id}" data-action="logs" data-name="${c.name}"><i class="fa-solid fa-terminal"></i></button>
+              <button class="btn-danger" data-id="${c.id}" data-action="remove" data-name="${c.name}"><i class="fa-solid fa-trash"></i></button>
+            </div>
+          `;
+          containerList.appendChild(row);
+        });
+      }
+
+      // ── Container Actions ──
+      containerList.addEventListener("click", async (e) => {
+        const btn = e.target.closest("[data-action]");
+        if (!btn) return;
+        const id = btn.dataset.id;
+        const action = btn.dataset.action;
+        const name = btn.dataset.name;
+
+        if (action === "logs") {
+          openLogViewer(id, name);
+          return;
+        }
+        if (action === "remove") {
+          if (!confirm(`Remove container "${name}"? This will stop and delete it.`)) return;
+        }
+
+        btn.disabled = true;
+        try {
+          await fetch(`/docker/${action}`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ id }),
+          });
+        } catch (e) {}
+        setTimeout(() => { fetchContainers(); btn.disabled = false; }, 1500);
+      });
+
+      // ── Log Viewer ──
+      function openLogViewer(containerId, containerName) {
+        logContainer = containerId;
+        document.getElementById("log-title").textContent = `Logs — ${containerName}`;
+        document.getElementById("log-content").textContent = "Loading...";
+        document.getElementById("log-overlay").classList.add("show");
+        fetchLogs();
+        if (document.getElementById("log-follow").checked) {
+          logInterval = setInterval(fetchLogs, 3000);
+        }
+      }
+
+      async function fetchLogs() {
+        if (!logContainer) return;
+        const lines = document.getElementById("log-lines").value;
+        try {
+          const res = await fetch(`/docker/logs?id=${logContainer}&lines=${lines}`);
+          const data = await res.json();
+          const pre = document.getElementById("log-content");
+          pre.textContent = data.logs || "No logs.";
+          if (document.getElementById("log-follow").checked) {
+            pre.scrollTop = pre.scrollHeight;
+          }
+        } catch (e) {
+          document.getElementById("log-content").textContent = "Failed to fetch logs.";
+        }
+      }
+
+      document.getElementById("close-log").addEventListener("click", () => {
+        document.getElementById("log-overlay").classList.remove("show");
+        logContainer = null;
+        if (logInterval) { clearInterval(logInterval); logInterval = null; }
+      });
+
+      document.getElementById("log-overlay").addEventListener("click", (e) => {
+        if (e.target === document.getElementById("log-overlay")) {
+          document.getElementById("close-log").click();
+        }
+      });
+
+      document.getElementById("log-refresh-btn").addEventListener("click", fetchLogs);
+
+      document.getElementById("log-follow").addEventListener("change", (e) => {
+        if (e.target.checked) {
+          logInterval = setInterval(fetchLogs, 3000);
+        } else {
+          if (logInterval) { clearInterval(logInterval); logInterval = null; }
+        }
+      });
+
+      // ── Template Install Modal ──
+      let currentTemplate = null;
+
+      function showInstallModal(tpl) {
+        currentTemplate = tpl;
+        document.getElementById("install-title").innerHTML = `<i class="fa-solid fa-download"></i> Install ${tpl.name}`;
+        document.getElementById("install-modal-log").textContent = "Ready";
+
+        const fields = document.getElementById("install-fields");
+        fields.innerHTML = `
+          <label>Container Name<input type="text" id="tpl-name" value="${tpl.name.toLowerCase().replace(/\s+/g, '-')}" /></label>
+          <label>Image<input type="text" id="tpl-image" value="${tpl.image}" /></label>
+          <label>Ports <small class="subtle">(host:container, one per line)</small>
+            <textarea id="tpl-ports" rows="2" style="width:100%;border-radius:10px;border:1px solid var(--border);padding:8px;font-size:13px;font-family:monospace">${(tpl.ports || []).join("\n")}</textarea>
+          </label>
+          <label>Volumes <small class="subtle">(host:container, one per line)</small>
+            <textarea id="tpl-volumes" rows="2" style="width:100%;border-radius:10px;border:1px solid var(--border);padding:8px;font-size:13px;font-family:monospace">${(tpl.volumes || []).join("\n")}</textarea>
+          </label>
+          <label>Environment <small class="subtle">(KEY=VALUE, one per line)</small>
+            <textarea id="tpl-env" rows="2" style="width:100%;border-radius:10px;border:1px solid var(--border);padding:8px;font-size:13px;font-family:monospace">${(tpl.env || []).join("\n")}</textarea>
+          </label>
+          <label>Network
+            <select id="tpl-network" style="padding:8px;border-radius:10px;border:1px solid var(--border)">
+              <option value="" ${!tpl.network ? 'selected' : ''}>Default (bridge)</option>
+              <option value="host" ${tpl.network === 'host' ? 'selected' : ''}>Host</option>
+            </select>
+          </label>
+        `;
+
+        document.getElementById("install-overlay").classList.add("show");
+      }
+
+      document.getElementById("install-confirm").addEventListener("click", async () => {
+        const logEl = document.getElementById("install-modal-log");
+        logEl.textContent = "Pulling image and starting container...";
+
+        const payload = {
+          name: document.getElementById("tpl-name").value.trim(),
+          image: document.getElementById("tpl-image").value.trim(),
+          ports: document.getElementById("tpl-ports").value.split("\n").map(s => s.trim()).filter(Boolean),
+          volumes: document.getElementById("tpl-volumes").value.split("\n").map(s => s.trim()).filter(Boolean),
+          env: document.getElementById("tpl-env").value.split("\n").map(s => s.trim()).filter(Boolean),
+          network: document.getElementById("tpl-network").value,
+          restart: currentTemplate?.restart || "unless-stopped",
+        };
+
+        try {
+          const res = await fetch("/docker/install", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (data.ok) {
+            logEl.textContent = "Installed successfully!";
+            setTimeout(() => { closeOverlay("install-overlay"); fetchContainers(); }, 1500);
+          } else {
+            logEl.textContent = "Error: " + (data.error || "Unknown error");
+          }
+        } catch (e) {
+          logEl.textContent = "Request failed: " + e;
+        }
+      });
+
+      // ── Custom Install Form ──
+      document.getElementById("custom-install-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        installLog.textContent = "Pulling image and starting container...";
+
+        const ports = document.getElementById("ci-ports").value.split(",").map(s => s.trim()).filter(Boolean);
+        const volumes = document.getElementById("ci-volumes").value.split(",").map(s => s.trim()).filter(Boolean);
+        const env = document.getElementById("ci-env").value.split(",").map(s => s.trim()).filter(Boolean);
+
+        const payload = {
+          name: document.getElementById("ci-name").value.trim(),
+          image: document.getElementById("ci-image").value.trim(),
+          ports,
+          volumes,
+          env,
+          network: document.getElementById("ci-network").value,
+          restart: document.getElementById("ci-restart").value,
+        };
+
+        try {
+          const res = await fetch("/docker/install", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (data.ok) {
+            installLog.textContent = "Installed successfully!";
+            setTimeout(fetchContainers, 1500);
+          } else {
+            installLog.textContent = "Error: " + (data.error || "Unknown error");
+          }
+        } catch (e) {
+          installLog.textContent = "Request failed: " + e;
+        }
+      });
+
+      function closeOverlay(id) { document.getElementById(id).classList.remove("show"); }
+      document.getElementById("install-overlay").addEventListener("click", (e) => {
+        if (e.target === document.getElementById("install-overlay")) closeOverlay("install-overlay");
+      });
+
+      // ── Refresh ──
+      document.getElementById("refresh-btn").addEventListener("click", fetchContainers);
+      setInterval(fetchContainers, 15000);
+      fetchContainers();
+    </script>
+  </body>
+</html>

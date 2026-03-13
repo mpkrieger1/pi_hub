@@ -1159,6 +1159,222 @@ def files_download():
 
 
 # ═══════════════════════════════════════════════════════════════
+# DOCKER MANAGER
+# ═══════════════════════════════════════════════════════════════
+
+@app.route("/docker")
+def docker_page():
+    return render_template("docker.html", app_name=APP_NAME)
+
+
+@app.route("/docker/list")
+def docker_list():
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--format",
+             '{"id":"{{.ID}}","name":"{{.Names}}","image":"{{.Image}}","state":"{{.State}}","status":"{{.Status}}","ports":"{{.Ports}}"}'],
+            capture_output=True, text=True, timeout=10,
+        )
+        containers = []
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+            try:
+                c = json.loads(line)
+                # Parse ports into a clean list
+                raw_ports = c.get("ports", "")
+                c["ports"] = [p.strip() for p in raw_ports.split(",") if p.strip()] if raw_ports else []
+                containers.append(c)
+            except json.JSONDecodeError:
+                pass
+        return jsonify(containers)
+    except Exception as e:
+        return jsonify([])
+
+
+@app.route("/docker/start", methods=["POST"])
+def docker_start():
+    data = request.get_json() or {}
+    cid = data.get("id", "").strip()
+    if not cid:
+        return jsonify({"ok": False, "error": "No container ID."}), 400
+    try:
+        result = subprocess.run(["docker", "start", cid], capture_output=True, text=True, timeout=30)
+        return jsonify({"ok": result.returncode == 0, "output": result.stdout + result.stderr})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/docker/stop", methods=["POST"])
+def docker_stop():
+    data = request.get_json() or {}
+    cid = data.get("id", "").strip()
+    if not cid:
+        return jsonify({"ok": False, "error": "No container ID."}), 400
+    try:
+        result = subprocess.run(["docker", "stop", cid], capture_output=True, text=True, timeout=30)
+        return jsonify({"ok": result.returncode == 0, "output": result.stdout + result.stderr})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/docker/restart", methods=["POST"])
+def docker_restart():
+    data = request.get_json() or {}
+    cid = data.get("id", "").strip()
+    if not cid:
+        return jsonify({"ok": False, "error": "No container ID."}), 400
+    try:
+        result = subprocess.run(["docker", "restart", cid], capture_output=True, text=True, timeout=30)
+        return jsonify({"ok": result.returncode == 0, "output": result.stdout + result.stderr})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/docker/remove", methods=["POST"])
+def docker_remove():
+    data = request.get_json() or {}
+    cid = data.get("id", "").strip()
+    if not cid:
+        return jsonify({"ok": False, "error": "No container ID."}), 400
+    try:
+        # Stop first, then remove
+        subprocess.run(["docker", "stop", cid], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(["docker", "rm", cid], capture_output=True, text=True, timeout=15)
+        return jsonify({"ok": result.returncode == 0, "output": result.stdout + result.stderr})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/docker/logs")
+def docker_logs():
+    cid = request.args.get("id", "").strip()
+    lines = request.args.get("lines", "100").strip()
+    if not cid:
+        return jsonify({"logs": "No container ID."}), 400
+    if not lines.isdigit():
+        lines = "100"
+    try:
+        result = subprocess.run(
+            ["docker", "logs", "--tail", lines, cid],
+            capture_output=True, text=True, timeout=10,
+        )
+        return jsonify({"logs": result.stdout + result.stderr})
+    except Exception as e:
+        return jsonify({"logs": str(e)})
+
+
+@app.route("/docker/install", methods=["POST"])
+def docker_install():
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    image = data.get("image", "").strip()
+    ports = data.get("ports", [])
+    volumes = data.get("volumes", [])
+    env = data.get("env", [])
+    network = data.get("network", "")
+    restart = data.get("restart", "unless-stopped")
+
+    if not name or not image:
+        return jsonify({"ok": False, "error": "Name and image are required."}), 400
+
+    # Validate name: alphanumeric, hyphens, underscores only
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        return jsonify({"ok": False, "error": "Invalid container name."}), 400
+
+    # Pull image first
+    try:
+        pull_result = subprocess.run(
+            ["docker", "pull", image],
+            capture_output=True, text=True, timeout=300,
+        )
+        if pull_result.returncode != 0:
+            return jsonify({"ok": False, "error": "Pull failed: " + pull_result.stderr}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "Image pull timed out (5 min)."}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    # Build docker run command
+    cmd = ["docker", "run", "-d", "--name", name]
+
+    if restart:
+        cmd += ["--restart", restart]
+    if network:
+        cmd += ["--network", network]
+    for p in ports:
+        p = p.strip()
+        if p:
+            cmd += ["-p", p]
+    for v in volumes:
+        v = v.strip()
+        if v:
+            cmd += ["-v", v]
+    for e_var in env:
+        e_var = e_var.strip()
+        if e_var:
+            cmd += ["-e", e_var]
+
+    cmd.append(image)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return jsonify({"ok": True, "container_id": result.stdout.strip()})
+        else:
+            return jsonify({"ok": False, "error": result.stderr.strip()}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════
+# SYSTEM LOG VIEWER
+# ═══════════════════════════════════════════════════════════════
+
+VIEWABLE_LOGS = {
+    "syslog": "/var/log/syslog",
+    "pi-hub": "__journalctl:pi-hub",
+    "myflow": "__journalctl:myflow",
+    "baseball-sim": "__journalctl:baseball_sim",
+    "docker": "__journalctl:docker",
+    "auth": "/var/log/auth.log",
+}
+
+
+@app.route("/logs/sources")
+def log_sources():
+    return jsonify(list(VIEWABLE_LOGS.keys()))
+
+
+@app.route("/logs/view")
+def log_view():
+    source = request.args.get("source", "").strip()
+    lines = request.args.get("lines", "100").strip()
+    if source not in VIEWABLE_LOGS:
+        return jsonify({"logs": "Unknown log source."}), 400
+    if not lines.isdigit():
+        lines = "100"
+
+    target = VIEWABLE_LOGS[source]
+
+    try:
+        if target.startswith("__journalctl:"):
+            unit = target.split(":", 1)[1]
+            result = subprocess.run(
+                ["journalctl", "-u", unit, "-n", lines, "--no-pager"],
+                capture_output=True, text=True, timeout=10,
+            )
+        else:
+            result = subprocess.run(
+                ["tail", "-n", lines, target],
+                capture_output=True, text=True, timeout=10,
+            )
+        return jsonify({"logs": result.stdout + result.stderr})
+    except Exception as e:
+        return jsonify({"logs": str(e)})
+
+
+# ═══════════════════════════════════════════════════════════════
 # QBITTORRENT PROXY
 # ═══════════════════════════════════════════════════════════════
 

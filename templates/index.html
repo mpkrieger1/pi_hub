@@ -101,6 +101,14 @@
             <i class="fa-solid fa-folder-open"></i>
             File Manager
           </a>
+          <a class="quick-link" href="/docker">
+            <i class="fa-solid fa-docker fa-brands"></i>
+            Docker
+          </a>
+          <a class="quick-link" href="#" id="open-logs-link">
+            <i class="fa-solid fa-terminal"></i>
+            System Logs
+          </a>
         </div>
       </div>
     </section>
@@ -291,6 +299,121 @@
       </div>
     </section>
 
+    <!-- System Log Viewer Popup -->
+    <style>
+      .syslog-overlay {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5); display: none; place-items: center; z-index: 200;
+      }
+      .syslog-overlay.show { display: grid; }
+      .syslog-box {
+        background: #0f172a; border-radius: 16px; padding: 16px;
+        width: min(92vw, 960px); height: min(82vh, 650px);
+        display: flex; flex-direction: column;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+      }
+      .syslog-header {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 10px; gap: 12px; flex-wrap: wrap;
+      }
+      .syslog-header .title { color: #e2e8f0; font-size: 16px; font-weight: 600; }
+      .syslog-controls { display: flex; gap: 8px; align-items: center; }
+      .syslog-controls select, .syslog-controls button {
+        font-size: 12px; padding: 6px 10px; border-radius: 8px;
+        border: 1px solid #334155; background: #1e293b; color: #94a3b8;
+      }
+      .syslog-controls button:hover { background: #334155; color: #fff; cursor: pointer; }
+      .syslog-close { background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; padding: 4px 8px; }
+      .syslog-close:hover { color: #fff; }
+      .syslog-box pre {
+        flex: 1; margin: 0; overflow: auto; font-size: 12px;
+        max-height: none; background: transparent; padding: 0;
+      }
+    </style>
+    <div class="syslog-overlay" id="syslog-overlay">
+      <div class="syslog-box">
+        <div class="syslog-header">
+          <span class="title"><i class="fa-solid fa-terminal"></i> System Logs</span>
+          <div class="syslog-controls">
+            <select id="syslog-source"></select>
+            <select id="syslog-lines">
+              <option value="50">50 lines</option>
+              <option value="100" selected>100 lines</option>
+              <option value="500">500 lines</option>
+              <option value="1000">1000 lines</option>
+            </select>
+            <button id="syslog-refresh"><i class="fa-solid fa-rotate"></i></button>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;color:#94a3b8">
+              <input type="checkbox" id="syslog-follow" checked /> Follow
+            </label>
+            <button class="syslog-close" id="syslog-close">&times;</button>
+          </div>
+        </div>
+        <pre id="syslog-content">Select a log source above.</pre>
+      </div>
+    </div>
+
     <script src="/static/app.js"></script>
+    <script>
+      // ── System Log Viewer ──
+      const syslogOverlay = document.getElementById("syslog-overlay");
+      const syslogSource = document.getElementById("syslog-source");
+      const syslogContent = document.getElementById("syslog-content");
+      let syslogInterval = null;
+
+      document.getElementById("open-logs-link").addEventListener("click", async (e) => {
+        e.preventDefault();
+        syslogOverlay.classList.add("show");
+        // Load sources
+        if (syslogSource.options.length === 0) {
+          const res = await fetch("/logs/sources");
+          const sources = await res.json();
+          sources.forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = s; opt.textContent = s;
+            syslogSource.appendChild(opt);
+          });
+        }
+        fetchSyslog();
+        if (document.getElementById("syslog-follow").checked) {
+          syslogInterval = setInterval(fetchSyslog, 3000);
+        }
+      });
+
+      async function fetchSyslog() {
+        const source = syslogSource.value;
+        const lines = document.getElementById("syslog-lines").value;
+        if (!source) return;
+        try {
+          const res = await fetch(`/logs/view?source=${encodeURIComponent(source)}&lines=${lines}`);
+          const data = await res.json();
+          syslogContent.textContent = data.logs || "No logs.";
+          if (document.getElementById("syslog-follow").checked) {
+            syslogContent.scrollTop = syslogContent.scrollHeight;
+          }
+        } catch (e) {
+          syslogContent.textContent = "Failed to fetch logs.";
+        }
+      }
+
+      syslogSource.addEventListener("change", fetchSyslog);
+      document.getElementById("syslog-refresh").addEventListener("click", fetchSyslog);
+      document.getElementById("syslog-follow").addEventListener("change", (e) => {
+        if (e.target.checked) {
+          syslogInterval = setInterval(fetchSyslog, 3000);
+        } else {
+          if (syslogInterval) { clearInterval(syslogInterval); syslogInterval = null; }
+        }
+      });
+
+      document.getElementById("syslog-close").addEventListener("click", () => {
+        syslogOverlay.classList.remove("show");
+        if (syslogInterval) { clearInterval(syslogInterval); syslogInterval = null; }
+      });
+
+      syslogOverlay.addEventListener("click", (e) => {
+        if (e.target === syslogOverlay) document.getElementById("syslog-close").click();
+      });
+    </script>
   </body>
 </html>
