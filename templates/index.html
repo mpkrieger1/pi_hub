@@ -109,8 +109,64 @@
             <i class="fa-solid fa-terminal"></i>
             System Logs
           </a>
+          <a class="quick-link" href="pissh://open">
+            <i class="fa-solid fa-laptop-code"></i>
+            Pi SSH
+          </a>
+          <a class="quick-link" href="pissd://open">
+            <i class="fa-solid fa-folder-tree"></i>
+            PiSSD Drive
+          </a>
         </div>
       </div>
+    </section>
+
+    <section class="card">
+      <details class="setup-details">
+        <summary>
+          <i class="fa-solid fa-circle-info"></i>
+          <span>Pi SSH / PiSSD buttons — Windows setup (one-time)</span>
+          <i class="fa-solid fa-chevron-down chev"></i>
+        </summary>
+        <div class="setup-body">
+          <p class="subtle">
+            The <b>Pi SSH</b> and <b>PiSSD Drive</b> buttons use custom URL protocols
+            (<code>pissh://</code> and <code>pissd://</code>) that have to be registered
+            once on each Windows PC you use the hub from.
+          </p>
+          <ol>
+            <li>
+              Install <a href="https://www.putty.org/" target="_blank">PuTTY</a> so
+              <code>plink.exe</code> is available. Make sure
+              <code>C:\Program Files\PuTTY</code> is on your <code>PATH</code>.
+            </li>
+            <li>
+              Open the local copy of this repo on your Windows PC
+              (e.g. <code>C:\Users\mpkri\pi_hub\windows-setup\</code>) and double-click
+              <code>install.bat</code>. It registers the protocols in
+              <code>HKCU</code> — no admin needed.
+            </li>
+            <li>Restart your browser.</li>
+            <li>
+              First click on each button, the browser will ask
+              <em>"Open Pi SSH Protocol?"</em> — check <b>Always allow</b> and click
+              Open.
+            </li>
+            <li>
+              First SSH connection prompts to cache the host key — type <code>y</code>
+              and press Enter once.
+            </li>
+          </ol>
+          <p class="subtle">
+            <b>Files:</b> <code>windows-setup\open-ssh.bat</code> launches
+            <code>cmd /k plink -ssh mpkrieger1@mpk-pi -pw "&lt;password&gt;" -t</code>.
+            <code>windows-setup\open-pissd.bat</code> runs
+            <code>explorer.exe \\mpk-pi\PiSSD</code>. To remove the protocols later,
+            run <code>uninstall.bat</code>. If you move the <code>pi_hub</code>
+            folder, re-run <code>install.bat</code>.
+          </p>
+        </div>
+      </details>
     </section>
 
     <section class="card">

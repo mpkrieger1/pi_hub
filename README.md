@@ -28,3 +28,8 @@ sudo systemctl enable --now pi-hub
 ## Notes
 - Output defaults to `/mnt/ssd/Movies` (Windows: `\\mpk-pi\PiSSD\Movies`).
 - Only folders listed in `ALLOWED_OUTPUT_DIRS` can be used.
+
+## Windows launcher buttons (Pi SSH / PiSSD)
+The **Pi SSH** and **PiSSD Drive** buttons in Quick Links use custom URL protocols
+that have to be registered on your Windows client. See `windows-setup/README.md`
+and run `windows-setup\install.bat` once.
